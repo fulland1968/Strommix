@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0c0e">
+<title>Strommix Deutschland – Live</title>
+<style>
+:root{
+  --bg:#0b0c0e; --card:#15171a; --line:#292d32;
+  --text:#f5f6f7; --muted:#959ba3; --good:#a6e36f;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+body{min-height:100vh}
+main{max-width:1050px;margin:auto;padding:28px 18px 50px}
+header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:20px}
+.kicker{text-transform:uppercase;letter-spacing:.14em;font-size:12px;color:var(--muted)}
+h1{font-size:clamp(38px,8vw,76px);letter-spacing:-.065em;line-height:.9;margin:7px 0 0}
+.status{text-align:right;color:var(--muted);font-size:12px;line-height:1.45}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#777;margin-right:6px}
+.dot.ok{background:var(--good)}
+.hero{background:var(--card);border:1px solid var(--line);border-radius:24px;padding:22px;margin-bottom:12px}
+.big{font-size:clamp(76px,18vw,165px);font-weight:760;line-height:.86;letter-spacing:-.08em;margin:10px 0 8px}
+.big small{font-size:.25em;letter-spacing:-.02em}
+.sub{color:var(--muted);font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:10px}
+.stat,.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
+.stat .label,.card .label{color:var(--muted);font-size:12px;margin-bottom:8px}
+.stat .value{font-size:32px;font-weight:700;letter-spacing:-.045em}
+.stat .unit,.card .unit{font-size:12px;color:var(--muted);margin-left:4px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.card{min-height:104px}
+.card .value{font-size:28px;font-weight:700;letter-spacing:-.045em}
+.msg{display:none;margin-bottom:12px;padding:14px;border:1px solid #633;border-radius:16px;background:#241516;color:#ffb8b8;font-size:13px;line-height:1.5}
+button{background:var(--card);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 11px;font:inherit;margin-top:8px}
+footer{margin-top:18px;color:var(--muted);font-size:11px;line-height:1.5}
+@media(min-width:760px){
+  .stats{grid-template-columns:repeat(4,minmax(0,1fr))}
+  .grid{grid-template-columns:repeat(4,minmax(0,1fr))}
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div>
+    <div class="kicker">Deutschland · Energy Charts</div>
+    <h1>Strommix live</h1>
+  </div>
+  <div class="status">
+    <div><span id="dot" class="dot"></span><span id="status">Lade …</span></div>
+    <button id="reload">Aktualisieren</button>
+  </div>
+</header>
+
+<div id="msg" class="msg"></div>
+
+<section class="hero">
+  <div class="kicker">Erneuerbare · Anteil an der Last</div>
+  <div class="big"><span id="renew">–</span><small>%</small></div>
+  <div class="sub" id="stamp">Jüngster verfügbarer Datenpunkt</div>
+</section>
+
+<section class="stats">
+  <div class="stat"><div class="label">Öffentliche Erzeugung</div><div class="value"><span id="total">–</span><span class="unit">GW</span></div></div>
+  <div class="stat"><div class="label">Börsenpreis</div><div class="value"><span id="price">–</span><span class="unit">€/MWh</span></div></div>
+  <div class="stat"><div class="label">Wind gesamt</div><div class="value"><span id="wind">–</span><span class="unit">GW</span></div></div>
+  <div class="stat"><div class="label">Solar</div><div class="value"><span id="solarTop">–</span><span class="unit">GW</span></div></div>
+</section>
+
+<section id="cards" class="grid"></section>
+
+<footer>
+  Quelle: Fraunhofer ISE · Energy-Charts.info · API v2 · Daten gemäß API unter CC BY 4.0.
+  Die Anzeige verwendet jeweils den jüngsten verfügbaren Messwert und aktualisiert sich alle 5 Minuten.
+</footer>
+</main>
+
+<script>
+const BASE='https://api.energy-charts.info/v2';
+const ENDPOINTS={
+  power: BASE+'/public_power?country=de',
+  signal: BASE+'/signal?country=de',
+  price: BASE+'/price_current?bzn=DE-LU'
+};
+
+const names={
+  solar:'Solar',
+  wind_onshore:'Wind Onshore',
+  wind_offshore:'Wind Offshore',
+  biomass:'Biomasse',
+  hydro_run_of_river:'Laufwasser',
+  hydro_water_reservoir:'Speicherwasser',
+  hydro_pumped_storage:'Pumpspeicher',
+  fossil_gas:'Erdgas',
+  fossil_brown_coal_lignite:'Braunkohle',
+  fossil_hard_coal:'Steinkohle',
+  fossil_oil:'Mineralöl',
+  waste:'Abfall',
+  geothermal:'Geothermie',
+  nuclear:'Kernenergie'
+};
+
+function setStatus(text,ok=false){
+  document.getElementById('status').textContent=text;
+  document.getElementById('dot').className='dot'+(ok?' ok':'');
+}
+function showError(text){
+  const e=document.getElementById('msg');
+  e.textContent=text;e.style.display='block';
+}
+function clearError(){document.getElementById('msg').style.display='none'}
+async function getJSON(url){
+  const c=new AbortController();
+  const timer=setTimeout(()=>c.abort(),10000);
+  try{
+    const r=await fetch(url,{cache:'no-store',signal:c.signal});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return await r.json();
+  }finally{clearTimeout(timer)}
+}
+function latestRow(j){
+  if(!Array.isArray(j?.data)) return null;
+  for(let i=j.data.length-1;i>=0;i--){
+    const row=j.data[i];
+    if(row?.values && Object.values(row.values).some(v=>v!==null && Number.isFinite(Number(v)))) return row;
+  }
+  return null;
+}
+function firstNumeric(obj){
+  if(!obj) return null;
+  for(const v of Object.values(obj)) if(v!==null && Number.isFinite(Number(v))) return Number(v);
+  return null;
+}
+function gw(mw){
+  if(mw==null || !Number.isFinite(Number(mw))) return '–';
+  return (Number(mw)/1000).toLocaleString('de-DE',{maximumFractionDigits:1});
+}
+function fmt(v,d=1){
+  if(v==null || !Number.isFinite(Number(v))) return '–';
+  return Number(v).toLocaleString('de-DE',{maximumFractionDigits:d});
+}
+function renderPower(j){
+  const row=latestRow(j);
+  if(!row) throw new Error('Keine Erzeugungsdaten verfügbar');
+  const vals=row.values||{};
+  const meta=Object.fromEntries((j.series||[]).map(s=>[s.id,s]));
+
+  const generationIds=Object.keys(vals).filter(id=>{
+    const s=meta[id]||{};
+    return vals[id]!=null &&
+      Number.isFinite(Number(vals[id])) &&
+      !/load|share|signal|residual|forecast/i.test(id) &&
+      (s.unit==='MW' || j.unit==='MW' || !s.unit);
+  });
+
+  const total=generationIds.reduce((a,id)=>a+Math.max(0,Number(vals[id])||0),0);
+  document.getElementById('total').textContent=gw(total);
+  document.getElementById('wind').textContent=gw((Number(vals.wind_onshore)||0)+(Number(vals.wind_offshore)||0));
+  document.getElementById('solarTop').textContent=gw(vals.solar);
+
+  const preferred=['solar','wind_onshore','wind_offshore','biomass','hydro_run_of_river',
+    'hydro_water_reservoir','fossil_gas','fossil_brown_coal_lignite','fossil_hard_coal','waste'];
+  let ids=generationIds.sort((a,b)=>{
+    const ia=preferred.indexOf(a),ib=preferred.indexOf(b);
+    if(ia>=0&&ib>=0)return ia-ib;
+    if(ia>=0)return -1;if(ib>=0)return 1;
+    return Math.abs(Number(vals[b]))-Math.abs(Number(vals[a]));
+  }).slice(0,12);
+
+  const cards=document.getElementById('cards');cards.innerHTML='';
+  for(const id of ids){
+    const el=document.createElement('div');el.className='card';
+    el.innerHTML='<div class="label">'+(names[id]||meta[id]?.name||id.replaceAll('_',' '))+'</div>'+
+      '<div class="value">'+gw(vals[id])+'<span class="unit">GW</span></div>';
+    cards.appendChild(el);
+  }
+  document.getElementById('stamp').textContent='Messwert: '+
+    new Date(row.timestamp).toLocaleString('de-DE',{dateStyle:'medium',timeStyle:'short'});
+}
+function renderSignal(j){
+  const row=latestRow(j);
+  if(!row)return;
+  let val=null;
+  if(row.values){
+    val=row.values.renewable_share_of_load;
+    if(val==null) val=firstNumeric(row.values);
+  }
+  if(val!=null){
+    if(Number(val)<=1) val=Number(val)*100;
+    document.getElementById('renew').textContent=fmt(val,1);
+  }
+}
+function renderPrice(j){
+  let val=null;
+  if(j?.data){
+    if(Array.isArray(j.data)){
+      const row=latestRow(j) || j.data[j.data.length-1];
+      val=firstNumeric(row?.values)||firstNumeric(row);
+    }else{
+      val=firstNumeric(j.data.values)||firstNumeric(j.data);
+    }
+  }
+  if(val==null) val=firstNumeric(j?.values);
+  document.getElementById('price').textContent=fmt(val,1);
+}
+async function load(){
+  clearError();setStatus('Lade …',false);
+  const results=await Promise.allSettled([
+    getJSON(ENDPOINTS.power),
+    getJSON(ENDPOINTS.signal),
+    getJSON(ENDPOINTS.price)
+  ]);
+
+  let ok=0, errors=[];
+  if(results[0].status==='fulfilled'){try{renderPower(results[0].value);ok++}catch(e){errors.push('Strommix: '+e.message)}} else errors.push('Strommix: '+results[0].reason);
+  if(results[1].status==='fulfilled'){try{renderSignal(results[1].value);ok++}catch(e){errors.push('Erneuerbare: '+e.message)}} else errors.push('Erneuerbare: '+results[1].reason);
+  if(results[2].status==='fulfilled'){try{renderPrice(results[2].value);ok++}catch(e){errors.push('Preis: '+e.message)}} else errors.push('Preis: '+results[2].reason);
+
+  if(ok){
+    setStatus('Live · '+new Date().toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'}),true);
+    if(errors.length) showError('Teilweise keine Daten: '+errors.join(' · '));
+  }else{
+    setStatus('Keine Verbindung',false);
+    showError('Energy-Charts konnte nicht geladen werden. '+errors.join(' · '));
+  }
+}
+
+document.getElementById('reload').addEventListener('click',load);
+load();
+setInterval(load,300000);
+</script>
+</body>
+</html>
